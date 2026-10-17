@@ -1,0 +1,24 @@
+id: driving_events
+version: 1
+title: Driving events
+summary: Recognise harsh braking, harsh acceleration and sharp turns from an accelerometer in a vehicle.
+keywords: [driving, driver, car, truck, vehicle, fleet, brake, braking, acceleration, turn, cornering, scooter, bike, crash]
+default_task: classification
+sensor_ma: 0.15  # typical sensor current, used only for the battery estimate
+sensor: accelerometer
+window_ms: 2000
+hop_ratio: 0.5
+max_window_samples: 512
+include_magnitude: true
+feature_families: [time, spectral]
+min_minutes:
+  normal: 2
+  per_class: 0.3
+min_windows_per_class: 20
+targets:
+  anomaly: {detection_rate: 0.90, false_alarm_rate: 0.05}
+  classification: {accuracy: 0.85}
+model_budget_kb: 64
+starting_rung: rules
+default_max_latency_ms: 500
+normal_label_hints: [normal, cruise, cruising, steady, none, idle]

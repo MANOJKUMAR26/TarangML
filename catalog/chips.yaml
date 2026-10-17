@@ -1,0 +1,213 @@
+# Hand-edited V1 chip catalog (PRD section 8).
+# Prices are rough 1k-unit chip prices and power figures are rounded datasheet typicals.
+# Both are always shown to users as "estimated". Memory sizes and cores are from datasheets.
+
+vendors:
+  - id: espressif
+    name: Espressif
+  - id: st
+    name: STMicroelectronics
+  - id: nordic
+    name: Nordic Semiconductor
+  - id: raspberrypi
+    name: Raspberry Pi
+
+cores:
+  xtensa-lx7f:
+    arch: xtensa
+    fpu: single
+    description: Xtensa LX7 with single-precision FPU
+  rv32imc:
+    arch: riscv
+    fpu: none
+    description: RISC-V RV32IMC, no FPU
+  cortex-m4f:
+    arch: arm
+    fpu: single
+    gcc_flags: [-mcpu=cortex-m4, -mthumb, -mfpu=fpv4-sp-d16, -mfloat-abi=hard]
+    qemu_machine: mps2-an386
+    description: Arm Cortex-M4 with single-precision FPU
+  cortex-m33f:
+    arch: arm
+    fpu: single
+    gcc_flags: [-mcpu=cortex-m33, -mthumb, -mfpu=fpv5-sp-d16, -mfloat-abi=hard]
+    qemu_machine: mps2-an505
+    description: Arm Cortex-M33 with single-precision FPU
+  cortex-m0plus:
+    arch: arm
+    fpu: none
+    gcc_flags: [-mcpu=cortex-m0plus, -mthumb, -mfloat-abi=soft]
+    qemu_machine: mps2-an385
+    description: Arm Cortex-M0+, no FPU
+  rv32imc-generic:
+    arch: riscv
+    fpu: none
+    gcc_flags: [-march=rv32imc, -mabi=ilp32]
+    qemu_machine: virt
+    description: RISC-V RV32IMC core on the QEMU virt board
+
+chips:
+  - id: esp32s3
+    vendor: espressif
+    family: ESP32-S3
+    part_number: ESP32-S3FN8
+    core: xtensa-lx7f
+    clock_mhz: 240
+    ram_kb: 512
+    flash_kb: 8192
+    radios: [wifi, ble]
+    active_ma: 40.0
+    sleep_ma: 0.24
+    price_usd: 2.20
+    lifecycle: active
+    backend: espidf
+    idf_target: esp32s3
+    fallback_backend: null
+    emulator: {name: Espressif QEMU, machine: esp32s3, fidelity: chip}
+    cpi: {value: 1.25, source: estimated}
+    toolchain_image: espressif/idf:v5.5.6
+    onboarding: emulated
+    notes: Wi-Fi and Bluetooth LE built in; vector instructions for DSP.
+
+  - id: esp32c3
+    vendor: espressif
+    family: ESP32-C3
+    part_number: ESP32-C3FH4
+    core: rv32imc
+    clock_mhz: 160
+    ram_kb: 400
+    flash_kb: 4096
+    radios: [wifi, ble]
+    active_ma: 20.0
+    sleep_ma: 0.13
+    price_usd: 1.10
+    lifecycle: active
+    backend: espidf
+    idf_target: esp32c3
+    fallback_backend: riscv
+    fallback_core: rv32imc-generic
+    emulator: {name: Espressif QEMU, machine: esp32c3, fidelity: chip}
+    cpi: {value: 1.35, source: estimated}
+    toolchain_image: espressif/idf:v5.5.6
+    onboarding: emulated
+    notes: Cheapest Wi-Fi option, but no FPU so float maths is done in software.
+
+  - id: stm32f411
+    vendor: st
+    family: STM32F4
+    part_number: STM32F411CEU6
+    core: cortex-m4f
+    clock_mhz: 100
+    ram_kb: 128
+    flash_kb: 512
+    radios: []
+    active_ma: 10.0
+    sleep_ma: 0.04
+    price_usd: 3.50
+    lifecycle: active
+    backend: arm
+    emulator: {name: QEMU, machine: mps2-an386, fidelity: core}
+    cpi: {value: 1.25, source: estimated}
+    toolchain_image: tinyml/toolchains:2026.10
+    onboarding: emulated
+    notes: General-purpose Cortex-M4F, widely available on "Black Pill" boards.
+
+  - id: stm32l432
+    vendor: st
+    family: STM32L4
+    part_number: STM32L432KCU6
+    core: cortex-m4f
+    clock_mhz: 80
+    ram_kb: 64
+    flash_kb: 256
+    radios: []
+    active_ma: 6.7
+    sleep_ma: 0.0011
+    price_usd: 3.20
+    lifecycle: active
+    backend: arm
+    emulator: {name: QEMU, machine: mps2-an386, fidelity: core}
+    cpi: {value: 1.25, source: estimated}
+    toolchain_image: tinyml/toolchains:2026.10
+    onboarding: emulated
+    notes: Ultra-low-power Cortex-M4F with very low stop-mode current.
+
+  - id: nrf52840
+    vendor: nordic
+    family: nRF52
+    part_number: nRF52840-QIAA
+    core: cortex-m4f
+    clock_mhz: 64
+    ram_kb: 256
+    flash_kb: 1024
+    radios: [ble, thread, zigbee]
+    active_ma: 3.3
+    sleep_ma: 0.003
+    price_usd: 3.80
+    lifecycle: active
+    backend: arm
+    emulator: {name: QEMU, machine: mps2-an386, fidelity: core}
+    cpi: {value: 1.25, source: estimated}
+    toolchain_image: tinyml/toolchains:2026.10
+    onboarding: emulated
+    notes: Bluetooth LE built in, very low run current.
+
+  - id: nrf54l15
+    vendor: nordic
+    family: nRF54L
+    part_number: nRF54L15-QFAA
+    core: cortex-m33f
+    clock_mhz: 128
+    ram_kb: 256
+    flash_kb: 1524
+    radios: [ble, thread, zigbee]
+    active_ma: 3.0
+    sleep_ma: 0.003
+    price_usd: 2.90
+    lifecycle: active
+    backend: arm
+    emulator: {name: QEMU, machine: mps2-an505, fidelity: core}
+    cpi: {value: 1.2, source: estimated}
+    toolchain_image: tinyml/toolchains:2026.10
+    onboarding: emulated
+    notes: Newer Bluetooth LE chip, faster core and lower power than nRF52.
+
+  - id: rp2040
+    vendor: raspberrypi
+    family: RP2040
+    part_number: RP2040
+    core: cortex-m0plus
+    clock_mhz: 133
+    ram_kb: 264
+    flash_kb: 2048
+    radios: []
+    active_ma: 21.0
+    sleep_ma: 0.18
+    price_usd: 1.05
+    lifecycle: active
+    backend: arm
+    emulator: {name: QEMU, machine: mps2-an385, fidelity: community}
+    cpi: {value: 1.5, source: estimated}
+    toolchain_image: tinyml/toolchains:2026.10
+    onboarding: estimated
+    notes: Price includes an external 2 MB flash chip. No FPU. Pico W adds Wi-Fi through a separate radio chip (not modelled).
+
+  - id: rp2350
+    vendor: raspberrypi
+    family: RP2350
+    part_number: RP2350A
+    core: cortex-m33f
+    clock_mhz: 150
+    ram_kb: 520
+    flash_kb: 2048
+    radios: []
+    active_ma: 18.0
+    sleep_ma: 0.05
+    price_usd: 1.35
+    lifecycle: active
+    backend: arm
+    emulator: {name: QEMU, machine: mps2-an505, fidelity: community}
+    cpi: {value: 1.2, source: estimated}
+    toolchain_image: tinyml/toolchains:2026.10
+    onboarding: estimated
+    notes: Price includes an external 2 MB flash chip. Cortex-M33 cores with FPU.

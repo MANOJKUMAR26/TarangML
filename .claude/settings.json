@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run pytest:*)",
+      "Bash(uv run ruff:*)",
+      "Bash(uv run tinyml:*)",
+      "Bash(uv sync)",
+      "Bash(make test)",
+      "Bash(make parity)",
+      "Bash(git status)",
+      "Bash(git diff:*)"
+    ],
+    "deny": [
+      "Read(./workspace/**)",
+      "Read(~/.tinyml/keys/**)",
+      "Edit(~/.tinyml/keys/**)"
+    ]
+  }
+}

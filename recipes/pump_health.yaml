@@ -1,0 +1,24 @@
+id: pump_health
+version: 1
+title: Pump, motor or bearing health
+summary: Warn when a rotating machine vibrates differently from its normal behaviour.
+keywords: [pump, motor, bearing, fan, compressor, gearbox, turbine, spindle, vibration, vibrating, machine, rotating]
+default_task: anomaly
+sensor_ma: 0.2  # typical sensor current, used only for the battery estimate
+sensor: vibration
+window_ms: 250
+hop_ratio: 0.5
+max_window_samples: 2048
+include_magnitude: false
+feature_families: [time, spectral]
+min_minutes:
+  normal: 0.5
+  per_class: 0.25
+min_windows_per_class: 30
+targets:
+  anomaly: {detection_rate: 0.90, false_alarm_rate: 0.05}
+  classification: {accuracy: 0.90}
+model_budget_kb: 64
+starting_rung: rules
+default_max_latency_ms: 1000
+normal_label_hints: [normal, ok, healthy, good, baseline, nominal]
