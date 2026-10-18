@@ -131,6 +131,9 @@ class Store:
     def candidates(self, project_id: str) -> list[dict[str, Any]]:
         return self.all("SELECT * FROM candidates WHERE project_id = ? ORDER BY rung, rowid", (project_id,))
 
+    def select_candidate(self, project_id: str, candidate_id: str) -> None:
+        self.execute("UPDATE candidates SET selected = (id = ?) WHERE project_id = ?", (candidate_id, project_id))
+
     def selected_candidate(self, project_id: str) -> dict[str, Any] | None:
         return self.one("SELECT * FROM candidates WHERE project_id = ? AND selected = 1", (project_id,))
 

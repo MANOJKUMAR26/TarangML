@@ -420,29 +420,49 @@ async function algorithmView() {
   const chosen = d.candidates.find((c) => c.selected);
   const view = h("div", {},
     h("h1", {}, "Find the simplest thing that works"),
-    h("p", { class: "lede" }, "The platform tries plain rules first, then classic machine learning, then a tiny neural network, and stops at the first one that meets the target on recordings it never trained on."),
-    h("div", { class: "row" }, h("button", { class: "primary", onclick: () => runJob(`/projects/${state.pid}/train`, {}, "Training") }, chosen ? "Train again" : "Train")),
+    h("p", { class: "lede" }, "The platform tries plain rules, classic machine learning and a tiny neural network, tests each on recordings it never trained on, and recommends the simplest one that meets the target. You can use any of them instead."),
+    h("div", { class: "row" }, h("button", { class: "primary", onclick: () => runJob(`/projects/${state.pid}/train`, {}, "Training") }, d.candidates.length ? "Train again" : "Train")),
     jobBox());
   if (!tr) return view;
-  if (tr.explanation) view.append(...explanationBlock(tr.explanation));
-  if (tr.data_request) view.append(h("div", { class: "panel" }, h("p", { class: "voice small error" }, tr.data_request), h("button", { onclick: () => go(state.pid, "data") }, "Go back to the data")));
-  const byRung = { 1: [], 2: [], 3: [] };
-  d.candidates.forEach((c) => byRung[c.rung].push(c));
   const metricText = (c) => {
     const m = c.metrics || {};
     if ("accuracy" in m) return `accuracy ${pct(m.accuracy, 1)}, per event ${pct(m.balanced_accuracy, 1)}`;
     if ("false_alarm_rate" in m) return `faults caught ${m.detection_rate === null ? "n/a" : pct(m.detection_rate, 1)}, false alarms ${pct(m.false_alarm_rate, 1)}`;
-    return c.note;
+    return "";
   };
-  view.append(h("div", { class: "panel" }, h("h2", { style: "margin-top:0" }, "The ladder"),
+  const useModel = (c) => {
+    if (!c.passed && !confirm(`${c.algorithm.replaceAll("_", " ")} is below the target (${metricText(c)}). The package report will say so. Use it anyway?`)) return;
+    runJob(`/projects/${state.pid}/select`, { candidate_id: c.id }, `Switching to ${c.algorithm.replaceAll("_", " ")}`);
+  };
+  const best = d.candidates.find((c) => c.id === tr.best);
+  if (!chosen && tr.data_request) {
+    view.append(h("div", { class: "panel" },
+      h("h2", { style: "margin-top:0" }, "No model met the target"),
+      h("p", { class: "voice small error" }, tr.data_request),
+      h("p", {}, "You can improve the data and train again, or use one of the models below anyway. The strongest one is marked."),
+      h("div", { class: "row" },
+        best ? h("button", { class: "primary", onclick: () => useModel(best) }, `Use the strongest (${best.algorithm.replaceAll("_", " ")})`) : null,
+        h("button", { onclick: () => go(state.pid, "data") }, "Go back to the data"))));
+  }
+  if (tr.explanation) view.append(...explanationBlock(tr.explanation));
+  if (chosen && !chosen.passed) view.append(h("p", { class: "voice small error" }, "This model is below the target. You can still rank chips and build, and the report will say it is below the target."));
+  const byRung = { 1: [], 2: [], 3: [] };
+  d.candidates.forEach((c) => byRung[c.rung].push(c));
+  const badges = (c) => [
+    c.id === tr.recommended ? h("span", { class: "badge good" }, "recommended") : null,
+    !tr.recommended && c.id === tr.best ? h("span", { class: "badge" }, "strongest") : null,
+    c.selected ? h("span", { class: "badge use" }, "in use") : null,
+  ];
+  view.append(h("div", { class: "panel" }, h("h2", { style: "margin-top:0" }, "Every model tried"),
     h("div", { class: "ladder" }, [1, 2, 3].map((r) => h("div", { class: "rung" },
       h("h3", {}, `Rung ${r}`, h("small", {}, (tr.rung_names || {})[r])),
       h("div", {}, byRung[r].length ? byRung[r].map((c) => h("div", { class: "cand" + (c.selected ? " chosen" : "") },
-        h("span", {}, h("strong", {}, c.algorithm.replaceAll("_", " ")), " ", h("span", { class: "muted" }, c.note || "")),
-        h("span", { class: "metrics" }, metricText(c), " ", c.passed ? "✓ meets target" : "✗"))) : h("div", { class: "cand untried" }, chosen && chosen.rung < r ? "not needed" : "not tried")))))));
+        h("span", {}, h("strong", {}, c.algorithm.replaceAll("_", " ")), " ", h("span", { class: "muted" }, c.note || ""), ...badges(c)),
+        h("span", { class: "metrics" }, metricText(c), c.metrics.size_bytes ? ` · ${c.metrics.size_bytes < 1024 ? `${c.metrics.size_bytes} B` : kb(c.metrics.size_bytes)}` : "", " ", c.passed ? "✓ meets target" : "✗ below target",
+          c.artifact_path && !c.selected ? h("button", { class: "small", onclick: () => useModel(c) }, "Use this") : null))) : h("div", { class: "cand untried" }, "not tried")))))));
   const viz = tr.viz || {};
   const grid = h("div", { class: "grid2" });
-  if (viz.hist && Object.keys(viz.hist).length) grid.append(h("div", { class: "panel" }, h("h2", { style: "margin-top:0" }, "The most useful measurement"), h("p", { class: "muted", style: "margin-top:0" }, `${viz.feature_label[0].toUpperCase()}${viz.feature_label.slice(1)}, for each kind of data`), histogram(viz)));
+  if (chosen && viz.hist && Object.keys(viz.hist).length) grid.append(h("div", { class: "panel" }, h("h2", { style: "margin-top:0" }, "The most useful measurement"), h("p", { class: "muted", style: "margin-top:0" }, `${viz.feature_label[0].toUpperCase()}${viz.feature_label.slice(1)}, for each kind of data`), histogram(viz)));
   if (chosen && chosen.metrics.confusion) grid.append(h("div", { class: "panel" }, h("h2", { style: "margin-top:0" }, "Test results"), confusion(chosen.metrics, tr.classes)));
   if (chosen && "false_alarm_rate" in chosen.metrics) {
     const m = chosen.metrics;
@@ -458,7 +478,7 @@ async function algorithmView() {
 }
 
 function explanationBlock(text) {
-  const rules = text.match(/^(Rules were enough): (if .*)\.$/);
+  const rules = text.match(/^(Rules were enough|Rules, below the target): (if .*)\.$/);
   if (!rules || !rules[2].includes("; ")) return [h("p", { class: "voice" }, text)];
   return [h("p", { class: "voice" }, `${rules[1]}. The device follows these rules:`),
     h("ul", { class: "rules" }, rules[2].split("; ").map((r) => h("li", {}, r)))];

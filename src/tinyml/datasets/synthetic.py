@@ -19,8 +19,11 @@ def _raised_cosine(n: int) -> np.ndarray:
 
 
 def pump(path: Path, seed: int = 7, rate: int = 4000, normal_recordings: int = 4, normal_s: float = 30.0,
-         fault_recordings: int = 3, fault_s: float = 10.0) -> Path:
-    """Two-axis vibration of a pump. Faults add bearing impacts that ring a structural resonance."""
+         fault_recordings: int = 3, fault_s: float = 10.0, fault_strength: float = 0.9) -> Path:
+    """Two-axis vibration of a pump. Faults add bearing impacts that ring a structural resonance.
+
+    A small ``fault_strength`` (around 0.1) gives early-stage faults that plain thresholds miss.
+    """
     rng = np.random.default_rng(seed)
     frames = []
 
@@ -44,7 +47,7 @@ def pump(path: Path, seed: int = 7, rate: int = 4000, normal_recordings: int = 4
                 idx = int(k * rate + rng.normal(0, 0.0004 * rate))
                 if 0 <= idx < n:
                     impacts[idx] = rng.uniform(0.6, 1.0)
-            ringing = np.convolve(impacts, ring, mode="same") * load * 0.9
+            ringing = np.convolve(impacts, ring, mode="same") * load * fault_strength
             base[:, 0] += ringing
             base[:, 1] += 0.6 * ringing
         return pd.DataFrame({"time": np.round(t, 6), "accel_x": np.round(base[:, 0], 5),

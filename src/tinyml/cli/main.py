@@ -78,16 +78,71 @@ def _ingest(project_id: str, data: list[Path], sample_rate: float | None, intera
     return result
 
 
-def _train(project_id: str) -> dict:
+MODEL_HELP = ("Which trained model to use: 'recommended' (the simplest that meets the target), 'best' (the "
+              "strongest, even below the target), an algorithm such as random_forest, or a candidate id")
+
+
+def _train(project_id: str, model: str = "recommended") -> dict:
     from tinyml.pipeline import stages
 
+    log = lambda m: console.print(f"[dim]{m}[/dim]")  # noqa: E731
     try:
-        result = stages.train(_store(), project_id, log=lambda m: console.print(f"[dim]{m}[/dim]"))
+        result = stages.train(_store(), project_id, log=log)
+        _print_candidates(project_id)
+        if model != "recommended" or result["chosen"] is None:
+            if model == "recommended":
+                console.print("[red]No model met the target.[/red] To continue anyway, pick one with --model best, "
+                              "--model <algorithm> or --model <id>.")
+                raise typer.Exit(3)
+            result = stages.select_model(_store(), project_id, _resolve_model(project_id, model), log=log)
     except stages.StageError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(3) from exc
+    if not result["chosen"]["passed"]:
+        console.print("[yellow]This model is below the target; the report will say so.[/yellow]")
     console.print(f"[bold green]{result['explanation']}[/bold green]")
     return result
+
+
+def _resolve_model(project_id: str, choice: str) -> str:
+    from tinyml.ml.ladder import strength
+
+    task = _store().project(project_id)["spec"]["task"]
+    trained = [r for r in _store().candidates(project_id) if r["artifact_path"]]
+    if choice == "recommended":
+        matching = [r for r in trained if r["passed"]][:1]
+    elif choice == "best":
+        matching = trained
+    else:
+        matching = [r for r in trained if choice in (r["id"], r["algorithm"])]
+    if not matching:
+        names = ", ".join(sorted({r["algorithm"] for r in trained}))
+        hint = "No model meets the target" if choice == "recommended" else f"No trained model called '{choice}'"
+        console.print(f"[red]{hint}. Choose best or one of: {names}.[/red]")
+        raise typer.Exit(3)
+    return max(matching, key=lambda r: strength(r["metrics"], task))["id"]
+
+
+def _print_candidates(project_id: str) -> None:
+    from rich.table import Table
+
+    table = Table(title="Models tried")
+    for col in ("id", "rung", "algorithm", "settings", "test result", "size", "target"):
+        table.add_column(col)
+    for r in _store().candidates(project_id):
+        m = r["metrics"] or {}
+        if "false_alarm_rate" in m:
+            caught = "n/a" if m["detection_rate"] is None else f"{m['detection_rate']:.0%}"
+            score = f"caught {caught}, false alarms {m['false_alarm_rate']:.0%}"
+        elif "accuracy" in m:
+            score = f"accuracy {m['accuracy']:.0%}, per event {m['balanced_accuracy']:.0%}"
+        else:
+            score = "-"
+        size_bytes = m.get("size_bytes") or 0
+        size = "-" if not size_bytes else f"{size_bytes} B" if size_bytes < 1024 else f"{size_bytes / 1024:.1f} KB"
+        table.add_row(r["id"], str(r["rung"]), r["algorithm"], r["note"] or "", score, size,
+                      "meets" if r["passed"] else "below")
+    console.print(table)
 
 
 def _num(n, fmt="{:,.0f}"):
@@ -105,13 +160,14 @@ def build(
     sample_rate: float | None = typer.Option(None, help="Readings per second, if the CSV has no time column"),
     out: Path | None = typer.Option(None, help="Copy the package to this folder"),
     interactive: bool = typer.Option(True, help="Ask when unsure (needs a terminal)"),
+    model: str = typer.Option("recommended", help=MODEL_HELP),
 ):
     """Sentence + CSV -> verified C library for one chip (zip)."""
     from tinyml.pipeline import stages
 
     project = _describe(describe, recipe, None, interactive)
     _ingest(project["id"], data, sample_rate, interactive)
-    _train(project["id"])
+    _train(project["id"], model)
     try:
         result = stages.build_for_chip(_store(), project["id"], chip, log=lambda m: console.print(f"[dim]{m}[/dim]"))
     except stages.StageError as exc:
@@ -148,6 +204,7 @@ def rank(
     chips: str | None = typer.Option(None, help="Comma-separated chip ids to consider (default: all)"),
     sample_rate: float | None = typer.Option(None),
     interactive: bool = typer.Option(True),
+    model: str = typer.Option("recommended", help=MODEL_HELP),
 ):
     """Rank microcontrollers for this data and goal; prints the top 3 with reasons."""
     from tinyml.pipeline import stages
@@ -156,7 +213,7 @@ def rank(
     _apply_overrides(project["id"], priority=priority, connectivity=connectivity, budget_usd_per_unit=budget,
                      vendor="any" if any_vendor else vendor)
     _ingest(project["id"], data, sample_rate, interactive)
-    _train(project["id"])
+    _train(project["id"], model)
     result = stages.rank_chips(_store(), project["id"], chips.split(",") if chips else None,
                                log=lambda m: console.print(f"[dim]{m}[/dim]"))
     table = Table(title="Chips that passed your filters")
@@ -183,6 +240,23 @@ def package(project_id: str, chip: str = typer.Option(..., "--chip")):
 
     result = stages.build_for_chip(_store(), project_id, chip, log=lambda m: console.print(f"[dim]{m}[/dim]"))
     console.print(f"Passed: {result['passed']}  Package: {result['package_path']}")
+
+
+@app.command("use-model")
+def use_model(project_id: str, choice: str = typer.Argument(..., help=MODEL_HELP)):
+    """Switch an already trained project to another of its models (see the table printed by training)."""
+    from tinyml.pipeline import stages
+
+    if _store().project(project_id) is None:
+        console.print(f"[red]Project {project_id} not found[/red]")
+        raise typer.Exit(1)
+    chosen = _resolve_model(project_id, choice)
+    try:
+        result = stages.select_model(_store(), project_id, chosen, log=lambda m: console.print(f"[dim]{m}[/dim]"))
+    except stages.StageError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(3) from exc
+    console.print(f"[bold green]{result['explanation']}[/bold green]")
 
 
 @app.command()

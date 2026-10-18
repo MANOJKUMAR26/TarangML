@@ -22,3 +22,12 @@ def test_catalog_and_project_flow():
         project = client.get(f"/api/projects/{pid}").json()
         assert project["preview"]["samples"]
         assert client.get("/").status_code == 200
+
+
+def test_select_rejects_unknown_candidate():
+    from tinyml.api.app import app
+
+    with TestClient(app) as client:
+        pid = client.post("/api/projects", json={"description": "pump vibration abnormal"}).json()["project"]["id"]
+        res = client.post(f"/api/projects/{pid}/select", json={"candidate_id": "cand_missing"})
+        assert res.status_code == 404

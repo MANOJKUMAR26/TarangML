@@ -46,6 +46,38 @@ def test_ladder_climbs_when_rules_are_not_enough(data_dir, monkeypatch):
     assert result["host_parity"]["passed"]
 
 
+def test_every_rung_is_tried_and_the_user_can_switch(data_dir):
+    store = get_store()
+    pid = stages.describe(store, "Alert me when my pump vibration looks abnormal. Battery, Wi-Fi.")["project"]["id"]
+    stages.ingest(store, pid, [data_dir / "pump.csv"])
+    result = stages.train(store, pid)
+    assert result["chosen"]["rung"] == 1 and result["chosen"]["id"] == result["recommended"]
+    rows = store.candidates(pid)
+    assert {r["rung"] for r in rows} == {1, 2, 3}
+    other = next(r for r in rows if r["rung"] == 3 and r["artifact_path"])
+    switched = stages.select_model(store, pid, other["id"])
+    assert switched["host_parity"]["passed"]
+    assert store.selected_candidate(pid)["id"] == other["id"]
+    artifact = json.loads((project_dir(pid, "models") / "model.json").read_text())
+    assert artifact["algorithm"] == other["algorithm"]
+
+
+def test_no_model_meets_the_target_lets_the_user_choose(data_dir):
+    store = get_store()
+    pid = stages.describe(store, "Alert me when my pump vibration looks abnormal. Battery, Wi-Fi.")["project"]["id"]
+    stages.ingest(store, pid, [data_dir / "pump_weak_faults.csv"])
+    result = stages.train(store, pid)
+    assert result["chosen"] is None and result["data_request"]
+    assert store.project(pid)["status"] == "needs_choice"
+    assert not (project_dir(pid, "models") / "model.json").exists()
+    with pytest.raises(stages.StageError):
+        stages.rank_chips(store, pid)
+    chosen = stages.select_model(store, pid, result["best"])
+    assert not chosen["chosen"]["passed"] and chosen["host_parity"]["passed"]
+    assert "below the target" in chosen["explanation"]
+    assert stages._below_target(store, pid) == result["data_request"]
+
+
 def test_blocked_data_stops_training(tmp_path):
     import numpy as np
     import pandas as pd

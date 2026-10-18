@@ -26,7 +26,8 @@ def _tag(n: TaggedNumber | None, fmt: str = "{:,.0f}") -> str:
 
 
 def report_md(spec: ProblemSpec, artifact: dict[str, Any], chip: Chip, m: ChipMeasurement, parity: dict[str, Any],
-              dataset: dict[str, Any], reproducibility: dict[str, Any], version: str) -> str:
+              dataset: dict[str, Any], reproducibility: dict[str, Any], version: str,
+              below_target: str | None = None) -> str:
     metrics = artifact.get("metrics", {})
     lines = [
         f"# TinyML package: {spec.recipe.replace('_', ' ')} on {chip.name}",
@@ -53,6 +54,10 @@ def report_md(spec: ProblemSpec, artifact: dict[str, Any], chip: Chip, m: ChipMe
         "",
         "## What the platform chose",
         "",
+    ]
+    if below_target:
+        lines += [f"> **Below the target.** {below_target} You chose to use this model anyway.", ""]
+    lines += [
         artifact.get("explanation", ""),
         "",
         f"Algorithm: `{artifact['algorithm']}` (rung {artifact['rung']}, {artifact['quantization']}). "

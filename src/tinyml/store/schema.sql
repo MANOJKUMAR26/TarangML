@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS projects (
     name          TEXT NOT NULL,
     description   TEXT NOT NULL,
     spec          TEXT,              -- ProblemSpec JSON
-    status        TEXT NOT NULL,     -- described | data_ready | trained | ranked | built | failed
+    status        TEXT NOT NULL,     -- described | data_ready | needs_choice | trained | ranked | built | failed
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );

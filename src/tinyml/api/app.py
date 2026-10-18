@@ -249,6 +249,18 @@ def train(project_id: str) -> dict[str, Any]:
     return _runner().submit("train", project_id)
 
 
+class SelectBody(BaseModel):
+    candidate_id: str
+
+
+@app.post("/api/projects/{project_id}/select")
+def select(project_id: str, body: SelectBody) -> dict[str, Any]:
+    _project(project_id)
+    if not any(c["id"] == body.candidate_id for c in _store().candidates(project_id)):
+        raise HTTPException(404, "candidate not found")
+    return _runner().submit("select", project_id, {"candidate_id": body.candidate_id})
+
+
 @app.post("/api/projects/{project_id}/rank")
 def rank(project_id: str, body: RankBody) -> dict[str, Any]:
     _project(project_id)

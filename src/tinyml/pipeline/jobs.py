@@ -75,6 +75,8 @@ class JobRunner:
     def _run(self, kind: str, project_id: str, params: dict[str, Any], log) -> dict[str, Any]:
         if kind == "train":
             return stages.train(self.store, project_id, log)
+        if kind == "select":
+            return stages.select_model(self.store, project_id, params["candidate_id"], log)
         if kind == "rank":
             return stages.rank_chips(self.store, project_id, params.get("chips"), log)
         if kind == "build":

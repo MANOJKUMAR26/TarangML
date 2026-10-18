@@ -71,7 +71,7 @@ class Model:
     def size_bytes(self) -> int:
         return len(json.dumps(self.params()))
 
-    def explain(self, features: list[Any]) -> str:
+    def explain(self, features: list[Any], passed: bool = True) -> str:
         return ""
 
 
@@ -118,7 +118,7 @@ class ThresholdRule(Model):
     def size_bytes(self) -> int:
         return 24 * len(self.conditions)
 
-    def explain(self, features: list[Any]) -> str:
+    def explain(self, features: list[Any], passed: bool = True) -> str:
         from tinyml.features.spec import describe
 
         parts = []
@@ -128,7 +128,8 @@ class ThresholdRule(Model):
             ratio = c["threshold"] / c["mean"] if c["mean"] not in (0.0,) else None
             times = f" ({ratio:.1f}x normal)" if ratio and ratio > 0 and c["op"] == "gt" else ""
             parts.append(f"{describe(fdef)} goes {word} {c['threshold']:.4g}{times}")
-        return "Rules were enough: an alert fires when " + " or ".join(parts) + "."
+        lead = "Rules were enough" if passed else "Rules, below the target"
+        return f"{lead}: an alert fires when " + " or ".join(parts) + "."
 
 
 # ---------------------------------------------------------------------------- trees (rungs 1 and 2)
@@ -240,11 +241,11 @@ class TreeEnsemble(Model):
         index_bytes = 2 if self.n_nodes < 32768 else 4
         return self.n_nodes * (2 + 4 + 2 * index_bytes) + self.leaves.size * 4 + len(self.roots) * index_bytes
 
-    def explain(self, features: list[Any]) -> str:
+    def explain(self, features: list[Any], passed: bool = True) -> str:
         from tinyml.features.spec import describe
 
         if self.algorithm == "decision_tree":
-            return "Rules were enough: " + self._rules_text(features)
+            return ("Rules were enough: " if passed else "Rules, below the target: ") + self._rules_text(features)
         used = sorted({int(f) for f in self.feature if f >= 0})
         top = ", ".join(describe(features[i]) for i in used[:4])
         label = {
@@ -252,7 +253,8 @@ class TreeEnsemble(Model):
             "gradient_boosting": f"A gradient-boosted model of {len(self.roots)} small trees",
             "isolation_forest": f"An isolation forest of {len(self.roots)} trees that learned normal behaviour",
         }.get(self.algorithm, self.algorithm)
-        return f"Simple rules were not enough. {label} reached the target, looking mostly at {top}."
+        verdict = "It reached the target." if passed else "It is below the target."
+        return f"{label}, looking mostly at {top}. {verdict}"
 
     def _rules_text(self, features: list[Any]) -> str:
         from tinyml.features.spec import describe
@@ -405,9 +407,12 @@ class QuantizedMLP(Model):
         w2 = np.asarray(self.q["w2"])
         return int(w1.size + w2.size + 4 * (w1.shape[0] + w2.shape[0]) + 8 * w1.shape[1] + 32)
 
-    def explain(self, features: list[Any]) -> str:
+    def explain(self, features: list[Any], passed: bool = True) -> str:
         hidden = len(self.q["b1"])
+        verdict = "" if passed else " It is below the target."
         if self.kind == "autoencoder":
-            return (f"Rules and tree models were not enough. A tiny 8-bit network ({hidden} hidden units) learned "
-                    "what normal looks like and raises an alert when a window does not fit that pattern.")
-        return f"Rules and tree models were not enough. A tiny 8-bit neural network with {hidden} hidden units reached the target."
+            return (f"A tiny 8-bit network ({hidden} hidden units) learned what normal looks like and raises an "
+                    f"alert when a window does not fit that pattern.{verdict}")
+        if passed:
+            return f"A tiny 8-bit neural network with {hidden} hidden units reached the target."
+        return f"A tiny 8-bit neural network with {hidden} hidden units.{verdict}"

@@ -1,9 +1,10 @@
-"""Step 4: climb the algorithm ladder and stop at the simplest option that meets the recipe target.
+"""Step 4: try every rung of the algorithm ladder and recommend the simplest option that meets the target.
 
 Rung 1: rules (thresholds for anomalies, a depth-2/3 decision tree for events).
 Rung 2: classic ML (isolation forest; random forest, then XGBoost), smallest size first.
 Rung 3: a tiny 8-bit neural network (autoencoder for anomalies, MLP for events).
-Candidates over the memory budget are dropped before they are scored.
+Candidates over the memory budget are dropped before they are scored. Every rung is tried so the
+user can compare them and pick another one than the recommendation.
 """
 
 from __future__ import annotations
@@ -53,10 +54,11 @@ class Candidate:
 @dataclass
 class LadderResult:
     candidates: list[Candidate]
-    chosen: Candidate | None
+    chosen: Candidate | None  # the recommendation: the simplest candidate that meets the target
     classes: list[str]
     data_request: str | None = None
     explanation: str = ""
+    best: Candidate | None = None  # the strongest candidate, whether or not it meets the target
     extras: dict[str, Any] = field(default_factory=dict)
 
 
@@ -415,64 +417,65 @@ def _autoencoder(inp: LadderInputs, idx: list[int], hidden: int) -> QuantizedMLP
 def run_ladder(inp: LadderInputs, log=lambda msg: None) -> LadderResult:
     candidates: list[Candidate] = []
 
-    def done(cand: Candidate) -> LadderResult:
-        model = cand.model
-        assert model is not None
-        explanation = model.explain([inp.defs[i] for i in model.feature_idx])
-        return LadderResult(candidates, cand, inp.classes, explanation=explanation)
-
     log("Rung 1: trying plain rules")
     if inp.task == "anomaly":
-        rule_cands = _rule_conditions(inp)
+        candidates.extend(_rule_conditions(inp))
     else:
-        rule_cands = [_candidate(_decision_tree(inp, d), inp, f"decision rules, depth {d}") for d in (2, 3)]
-    candidates.extend(rule_cands)
-    for cand in rule_cands:
-        if cand.passed:
-            return done(cand)
+        candidates.extend(_candidate(_decision_tree(inp, d), inp, f"decision rules, depth {d}") for d in (2, 3))
 
     log("Rung 2: trying classic machine learning")
     idx = _select_features(inp)
     if inp.task == "anomaly":
         for n in (25, 50, 100):
-            cand = _candidate(_isolation_forest(inp, idx, n), inp, f"{n} trees")
-            candidates.append(cand)
-            if cand.passed:
-                return done(cand)
+            candidates.append(_candidate(_isolation_forest(inp, idx, n), inp, f"{n} trees"))
     else:
         for n, depth in ((10, 4), (20, 6), (40, 8)):
-            cand = _candidate(_random_forest(inp, idx, n, depth), inp, f"{n} trees, depth {depth}")
-            candidates.append(cand)
-            if cand.passed:
-                return done(cand)
+            candidates.append(_candidate(_random_forest(inp, idx, n, depth), inp, f"{n} trees, depth {depth}"))
         for n, depth in ((20, 3), (50, 4)):
             try:
                 cand = _candidate(_xgboost(inp, idx, n, depth), inp, f"{n} rounds, depth {depth}")
             except Exception as exc:  # keep climbing if XGBoost is unavailable or misbehaves
                 cand = Candidate(2, "gradient_boosting", None, {}, False, f"skipped: {exc}", 0)
             candidates.append(cand)
-            if cand.passed:
-                return done(cand)
 
     log("Rung 3: trying a tiny 8-bit neural network")
+    builder = _autoencoder if inp.task == "anomaly" else _mlp
     for hidden in (8, 16, 32):
-        builder = _autoencoder if inp.task == "anomaly" else _mlp
         try:
             cand = _candidate(builder(inp, idx, hidden), inp, f"{hidden} hidden units, 8-bit")
         except Exception as exc:
             cand = Candidate(3, "neural_network", None, {}, False, f"skipped: {exc}", 0)
         candidates.append(cand)
-        if cand.passed:
-            return done(cand)
 
-    return LadderResult(candidates, None, inp.classes, data_request=_data_request(candidates, inp))
+    best = max((c for c in candidates if c.model is not None), key=lambda c: strength(c.metrics, inp.task),
+               default=None)
+    chosen = next((c for c in candidates if c.passed), None)
+    if chosen is not None:
+        log(f"Recommended: {chosen.algorithm.replace('_', ' ')} (rung {chosen.rung}), the simplest that meets "
+            "the target")
+        return LadderResult(candidates, chosen, inp.classes, explanation=explain(chosen, inp), best=best)
+    return LadderResult(candidates, None, inp.classes, data_request=_data_request(candidates, inp), best=best)
+
+
+def strength(metrics: dict[str, Any], task: str) -> float:
+    """One number to compare candidates when none meets the target; false alarms count double."""
+    if not metrics:
+        return float("-inf")
+    if task == "anomaly":
+        return (metrics.get("detection_rate") or 0.0) - 2 * (metrics.get("false_alarm_rate") or 0.0)
+    return metrics.get("balanced_accuracy") or 0.0
+
+
+def explain(cand: Candidate, inp: LadderInputs) -> str:
+    model = cand.model
+    assert model is not None
+    return model.explain([inp.defs[i] for i in model.feature_idx], cand.passed)
 
 
 def _data_request(candidates: list[Candidate], inp: LadderInputs) -> str:
     scored = [c for c in candidates if c.metrics]
     if inp.task == "anomaly":
-        best = max(scored, key=lambda c: (c.metrics.get("detection_rate") or 0)
-                   - 2 * (c.metrics.get("false_alarm_rate") or 0), default=None)
+        best = max(scored, key=lambda c: strength(c.metrics, inp.task), default=None)
         if best is None:
             return "No model could be trained. Upload more normal recordings."
         det = best.metrics.get("detection_rate")

@@ -12,6 +12,7 @@ import os
 import shutil
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -34,13 +35,13 @@ from tinyml.features.compute import compute_features
 from tinyml.features.spec import decision_tolerance, feature_space, tolerance
 from tinyml.intake.parse import parse_use_case
 from tinyml.ml.artifact import build_artifact, load, model_from_artifact, save
-from tinyml.ml.ladder import RUNG_NAMES, LadderInputs, run_ladder
+from tinyml.ml.ladder import RUNG_NAMES, LadderInputs, explain, run_ladder
 from tinyml.ml.split import split_windows
 from tinyml.packaging.package import build_package, report_md
 from tinyml.pipeline.measure import measure_chip
 from tinyml.ranking.score import pre_filter, rank
 from tinyml.recipes import get_recipe
-from tinyml.store import Store, project_dir
+from tinyml.store import Store, new_id, project_dir
 from tinyml.toolchains import HostBackend, TransientError
 
 Log = Callable[[str], None]
@@ -197,7 +198,22 @@ def _preview(data, points: int = 400) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------------------------- stage A
-def train(store: Store, project_id: str, log: Log = _noop) -> dict[str, Any]:
+@dataclass
+class _Training:
+    """Everything a model needs to be scored, turned into C and checked; rebuilt deterministically from the data."""
+
+    spec: ProblemSpec
+    recipe: Any
+    dataset: dict[str, Any]
+    ws: Any
+    defs: list[Any]
+    F: np.ndarray
+    tols: list[dict[str, float]]
+    split: Any
+    inp: LadderInputs
+
+
+def _training_inputs(store: Store, project_id: str, log: Log) -> _Training:
     spec = _spec(store, project_id)
     recipe = get_recipe(spec.recipe)
     dataset = store.latest_dataset(project_id)
@@ -224,53 +240,101 @@ def train(store: Store, project_id: str, log: Log = _noop) -> dict[str, Any]:
     inp = LadderInputs(F, defs, ws.labels, split, spec.task, normal, recipe, spec.seed,
                        np.array([t["rtol"] for t in decision_tols]), np.array([t["atol"] for t in decision_tols]),
                        unstable)
-    result = run_ladder(inp, log)
+    return _Training(spec, recipe, dataset, ws, defs, F, tols, split, inp)
 
+
+def train(store: Store, project_id: str, log: Log = _noop) -> dict[str, Any]:
+    """Try every rung, keep every model, and put the recommended one to use.
+
+    When no candidate meets the target nothing is put to use; the user picks one with `select_model`
+    (knowing it is below the target) or improves the data.
+    """
+    t = _training_inputs(store, project_id, log)
+    result = run_ladder(t.inp, log)
+
+    candidates_dir = project_dir(project_id, "models", "candidates")
+    for old in candidates_dir.glob("*.json"):
+        old.unlink()
     rows = []
     for cand in result.candidates:
-        rows.append({
-            "rung": cand.rung, "algorithm": cand.algorithm, "metrics": cand.metrics, "passed": cand.passed,
-            "selected": cand is result.chosen, "note": cand.note,
-            "artifact_path": None,
-        })
-    models_dir = project_dir(project_id, "models")
-    viz = _visual_data(inp, result)
-    (models_dir / "training.json").write_text(json.dumps({
-        "split": split.method, "windows": len(ws), "window_samples": ws.window_samples, "hop": ws.hop,
-        "classes": result.classes, "data_request": result.data_request, "explanation": result.explanation,
-        "viz": viz, "rung_names": RUNG_NAMES,
-    }, indent=1, default=float))
-    if result.chosen is None or result.chosen.model is None:
-        store.replace_candidates(project_id, rows)
-        store.update_project(project_id, status="failed")
-        raise StageError(result.data_request or "No model met the target.")
-
-    model = result.chosen.model
-    artifact = build_artifact(model, defs, spec.task, ws.window_samples, ws.hop, ws.rate, ws.axes, recipe.id,
-                              recipe.version, spec.seed, dataset["sha256"], result.explanation, result.chosen.metrics)
-    art_path = save(artifact, models_dir / "model.json")
-    for row in rows:
-        if row["selected"]:
-            row["artifact_path"] = str(art_path)
+        cand_id = new_id("cand")
+        path = None
+        if cand.model is not None:
+            artifact = _artifact(t, cand.model, explain(cand, t.inp), cand.metrics)
+            path = str(save(artifact, candidates_dir / f"{cand_id}.json"))
+        rows.append({"id": cand_id, "rung": cand.rung, "algorithm": cand.algorithm,
+                     "metrics": {**cand.metrics, "size_bytes": cand.size_bytes}, "passed": cand.passed,
+                     "selected": False, "note": cand.note, "artifact_path": path})
     store.replace_candidates(project_id, rows)
+    by_cand = {id(c): row["id"] for c, row in zip(result.candidates, rows, strict=True)}
+    recommended = by_cand[id(result.chosen)] if result.chosen is not None else None
+    best = by_cand[id(result.best)] if result.best is not None else None
 
+    models_dir = project_dir(project_id, "models")
+    for stale in ("model.json", "golden.json", "host_parity.json"):
+        (models_dir / stale).unlink(missing_ok=True)
+    shutil.rmtree(models_dir / "c", ignore_errors=True)
+    (models_dir / "training.json").write_text(json.dumps({
+        "split": t.split.method, "windows": len(t.ws), "window_samples": t.ws.window_samples, "hop": t.ws.hop,
+        "classes": result.classes, "data_request": result.data_request, "explanation": "",
+        "recommended": recommended, "best": best, "viz": {}, "rung_names": RUNG_NAMES,
+    }, indent=1, default=float))
+    summaries = [{"id": row["id"], **c.summary()} for c, row in zip(result.candidates, rows, strict=True)]
+    store.replace_chip_results(project_id, [])
+    if recommended is None:
+        store.update_project(project_id, status="needs_choice")
+        log(result.data_request or "No model met the target.")
+        return {"chosen": None, "recommended": None, "best": best, "data_request": result.data_request,
+                "candidates": summaries}
+    return {**_activate(store, project_id, t, recommended, log), "recommended": recommended, "best": best,
+            "candidates": summaries}
+
+
+def select_model(store: Store, project_id: str, candidate_id: str, log: Log = _noop) -> dict[str, Any]:
+    """Put a candidate the user picked to use: C code, golden windows and host parity, as for the recommendation."""
+    if not any(c["id"] == candidate_id for c in store.candidates(project_id)):
+        raise StageError("That model is not one of this project's candidates; train again.")
+    t = _training_inputs(store, project_id, log)
+    store.replace_chip_results(project_id, [])
+    return _activate(store, project_id, t, candidate_id, log)
+
+
+def _artifact(t: _Training, model, explanation: str, metrics: dict[str, Any]) -> dict[str, Any]:
+    return build_artifact(model, t.defs, t.spec.task, t.ws.window_samples, t.ws.hop, t.ws.rate, t.ws.axes,
+                          t.recipe.id, t.recipe.version, t.spec.seed, t.dataset["sha256"], explanation, metrics)
+
+
+def _activate(store: Store, project_id: str, t: _Training, candidate_id: str, log: Log) -> dict[str, Any]:
+    rows = store.candidates(project_id)
+    row = next(r for r in rows if r["id"] == candidate_id)
+    if not row["artifact_path"]:
+        raise StageError(f"{row['algorithm'].replace('_', ' ')} was not trained ({row['note']}); pick another model.")
+    artifact = load(Path(row["artifact_path"]))
+    model = model_from_artifact(artifact)
+    model.feature_idx = [next(i for i, d in enumerate(t.defs) if d.name == f["name"]) for f in artifact["features"]]
+    label = row["algorithm"].replace("_", " ")
+    log(f"Using {label} (rung {row['rung']})" + ("" if row["passed"] else ", below the target"))
+
+    models_dir = project_dir(project_id, "models")
+    save(artifact, models_dir / "model.json")
     log("Choosing golden test windows")
     settings = load_settings()
-    test_idx = np.where(split.test)[0]
-    F_model = F[:, model.feature_idx]
-    pred_test = model.predict(F_model[test_idx], inp.tol(model.feature_idx, test_idx))
-    window_bytes = ws.window_samples * len(ws.axes) * 4
-    pick = test_idx[G.select_windows(ws.labels[test_idx], pred_test, settings.max_golden_windows, window_bytes,
-                                     spec.seed)]
-    pred = model.predict(F_model[pick], inp.tol(model.feature_idx, pick))
-    golden = G.build_golden(ws.X[pick], ws.recordings[pick], ws.labels[pick], F_model[pick], pred, model,
+    test_idx = np.where(t.split.test)[0]
+    F_model = t.F[:, model.feature_idx]
+    pred_test = model.predict(F_model[test_idx], t.inp.tol(model.feature_idx, test_idx))
+    window_bytes = t.ws.window_samples * len(t.ws.axes) * 4
+    pick = test_idx[G.select_windows(t.ws.labels[test_idx], pred_test, settings.max_golden_windows, window_bytes,
+                                     t.spec.seed)]
+    pred = model.predict(F_model[pick], t.inp.tol(model.feature_idx, pick))
+    golden = G.build_golden(t.ws.X[pick], t.ws.recordings[pick], t.ws.labels[pick], F_model[pick], pred, model,
                             [f["name"] for f in artifact["features"]],
-                            [tols[i] for i in model.feature_idx], ws.axes)
+                            [t.tols[i] for i in model.feature_idx], t.ws.axes)
     (models_dir / "golden.json").write_text(golden.model_dump_json(by_alias=True, indent=1))
 
     log("Generating C code")
     gen_dir = models_dir / "c"
-    write(generate(artifact, _title(spec)), gen_dir)
+    shutil.rmtree(gen_dir, ignore_errors=True)
+    write(generate(artifact, _title(t.spec)), gen_dir)
     host = HostBackend()
     ok, why = host.available()
     host_parity: dict[str, Any] = {"skipped": why}
@@ -283,9 +347,17 @@ def train(store: Store, project_id: str, log: Log = _noop) -> dict[str, Any]:
             raise StageError("The generated C code does not match Python on this computer: "
                              + "; ".join(f["reason"] for f in host_parity["failures"][:3]))
     (models_dir / "host_parity.json").write_text(json.dumps(host_parity, indent=1))
+
+    store.select_candidate(project_id, candidate_id)
+    training_path = models_dir / "training.json"
+    training = json.loads(training_path.read_text())
+    training.update(explanation=artifact["explanation"], selected=candidate_id,
+                    viz=_visual_data(t.inp, model, t.defs))
+    training_path.write_text(json.dumps(training, indent=1, default=float))
     store.update_project(project_id, status="trained")
-    return {"chosen": result.chosen.summary(), "explanation": result.explanation,
-            "candidates": [c.summary() for c in result.candidates], "host_parity": host_parity,
+    chosen = {"id": candidate_id, "rung": row["rung"], "algorithm": row["algorithm"], "metrics": row["metrics"],
+              "passed": bool(row["passed"]), "note": row["note"]}
+    return {"chosen": chosen, "explanation": artifact["explanation"], "host_parity": host_parity,
             "golden_windows": len(golden.vectors)}
 
 
@@ -293,11 +365,8 @@ def _title(spec: ProblemSpec) -> str:
     return f"{spec.recipe.replace('_', ' ').title()} ({spec.task})"
 
 
-def _visual_data(inp: LadderInputs, result) -> dict[str, Any]:
-    """Small data for the UI: distribution of the most important feature for each class, plus thresholds."""
-    if result.chosen is None or result.chosen.model is None:
-        return {}
-    model = result.chosen.model
+def _visual_data(inp: LadderInputs, model, defs) -> dict[str, Any]:
+    """Small data for the UI: distribution of the model's first feature for each class, plus thresholds."""
     j = model.feature_idx[0]
     values = inp.F[:, j]
     lo, hi = float(np.percentile(values, 0.5)), float(np.percentile(values, 99.5))
@@ -305,8 +374,7 @@ def _visual_data(inp: LadderInputs, result) -> dict[str, Any]:
         hi = lo + 1e-9
     bins = np.linspace(lo, hi, 31)
     hist = {}
-    names = inp.classes
-    for c, name in enumerate(names):
+    for c, name in enumerate(inp.classes):
         mask = inp.y == c
         if mask.any():
             counts, _ = np.histogram(np.clip(values[mask], lo, hi), bins=bins)
@@ -316,7 +384,7 @@ def _visual_data(inp: LadderInputs, result) -> dict[str, Any]:
         thresholds = [c["threshold"] for c in model.conditions if c["feature"] == 0]
     from tinyml.features.spec import describe
 
-    return {"feature": inp.defs[j].name, "feature_label": describe(inp.defs[j]), "bins": bins.tolist(),
+    return {"feature": defs[j].name, "feature_label": describe(defs[j]), "bins": bins.tolist(),
             "hist": hist, "thresholds": thresholds}
 
 
@@ -455,7 +523,8 @@ def build_for_chip(store: Store, project_id: str, chip_id: str, log: Log = _noop
     package_path = None
     if passed:
         log("Parity passed; packaging and signing")
-        report = report_md(spec, artifact, chip, m, parity, dataset, reproducibility, version)
+        report = report_md(spec, artifact, chip, m, parity, dataset, reproducibility, version,
+                           _below_target(store, project_id))
         package_path = build_package(project_dir(project_id, "packages"), version, project["name"], chip, gen_dir,
                                      artifact, golden, report, reproducibility)
         (project_dir(project_id, "packages") / f"report-{chip.id}-v{version}.md").write_text(report)
@@ -470,6 +539,14 @@ def build_for_chip(store: Store, project_id: str, chip_id: str, log: Log = _noop
     store.mark_build_outcome(project_id, passed)
     store.update_project(project_id, status="built" if passed else "failed")
     return {**row, "passed": passed}
+
+
+def _below_target(store: Store, project_id: str) -> str | None:
+    selected = store.selected_candidate(project_id)
+    if selected is None or selected["passed"]:
+        return None
+    training = json.loads((project_dir(project_id, "models") / "training.json").read_text())
+    return training.get("data_request") or "The model did not meet the recipe's target on the test recordings."
 
 
 def _over_budget(chip: Chip, m: ChipMeasurement) -> str | None:
