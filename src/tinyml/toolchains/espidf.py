@@ -176,7 +176,9 @@ class EspIdfBackend:
             raise ToolchainError(f"ESP-IDF build failed for {target}:\n{detail}") from exc
         build = project / "build"
         flash = build / "qemu_flash.bin"
-        self.shell(f"python -m esptool --chip={target} merge-bin --output={flash} --pad-to-size=4MB @flash_args",
+        # ESP-IDF v5.5 ships esptool 4.x (merge_bin, --fill-flash-size); esptool 5 renamed both.
+        self.shell(f"python -m esptool --chip={target} merge_bin --output={flash} --fill-flash-size=4MB @flash_args"
+                   f" || python -m esptool --chip={target} merge-bin --output={flash} --pad-to-size=4MB @flash_args",
                    cwd=build, timeout=300)
         efuse = build / "qemu_efuse.bin"
         if not efuse.exists():
