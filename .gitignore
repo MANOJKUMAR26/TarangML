@@ -8,3 +8,4 @@ workspace/
 dist/
 build/
 .DS_Store
+samples/*.csv
