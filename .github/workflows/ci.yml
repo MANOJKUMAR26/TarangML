@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - run: uv run ruff check src tests
+      - run: uv run pytest tests/unit -q
+
+  parity-arm-riscv:
+    runs-on: ubuntu-24.04
+    needs: unit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi gcc-riscv64-unknown-elf qemu-system-arm qemu-system-misc
+      - run: uv sync
+      - run: uv run tinyml doctor
+      - run: uv run pytest tests/parity -q -m emulator -k "not esp32"
+
+  parity-espressif:
+    runs-on: ubuntu-24.04
+    needs: unit
+    env:
+      IDF_PATH: /home/runner/esp/esp-idf
+      IDF_TOOLS_PATH: /home/runner/.espressif
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /home/runner/esp
+            /home/runner/.espressif
+          key: espidf-v5.5.6-${{ runner.os }}
+      - run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libslirp0 libsdl2-2.0-0 libgcrypt20 libglib2.0-0 libpixman-1-0
+      - run: scripts/setup_espidf.sh
+      - run: uv sync
+      - run: uv run pytest tests/parity -q -m emulator -k "esp32"

@@ -1,0 +1,22 @@
+# Replace the handles with your team's GitHub usernames.
+/docs/contracts/            @lead
+/recipes/                   @lead
+/catalog/                   @lead
+/src/tinyml/decide/         @lead
+/src/tinyml/intake/         @lead
+/src/tinyml/contracts.py    @lead
+/src/tinyml/data/           @dev-a
+/src/tinyml/features/       @dev-a
+/src/tinyml/ml/             @dev-a
+/firmware/                  @dev-b
+/src/tinyml/codegen/        @dev-b
+/src/tinyml/toolchains/     @dev-b
+/src/tinyml/cli/            @dev-c
+/src/tinyml/api/            @dev-c
+/src/tinyml/pipeline/       @dev-c
+/src/tinyml/packaging/      @dev-c
+/src/tinyml/store/          @dev-c
+/ui/                        @dev-c
+/ci/                        @dev-c
+/.github/                   @dev-c
+/tests/parity/              @dev-c

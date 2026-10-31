@@ -1,0 +1,56 @@
+/*
+ * Example: feed sensor readings into the model.
+ * Replace read_sensor() and report() with your board's driver and radio code.
+ * Sample at TINYML_SAMPLE_RATE_HZ ({{ rate_c }}) readings per second.
+ */
+#include <stdio.h>
+
+#include "tinyml_model.h"
+
+static float window[TINYML_WINDOW_SAMPLES * TINYML_NUM_AXES];
+
+/* Stub: return one reading per axis ({{ axes|join(", ") }}). */
+static void read_sensor(float *sample)
+{
+    for (int a = 0; a < TINYML_NUM_AXES; a++) {
+        sample[a] = 0.0f;
+    }
+}
+
+static void report(tinyml_result_t r)
+{
+    printf("%s (score %.3f)\n", tinyml_class_names[r.label], (double)r.score);
+}
+
+int main(void)
+{
+{% if task == "anomaly" %}
+    /* First install: learn this machine's normal behaviour (it must be running normally). */
+    model_calibrate_begin();
+    for (int w = 0; w < TINYML_CALIBRATION_MIN_WINDOWS; w++) {
+        for (int i = 0; i < TINYML_WINDOW_SAMPLES; i++) {
+            read_sensor(&window[i * TINYML_NUM_AXES]);
+        }
+        model_calibrate_add(window);
+    }
+    model_calibrate_end();
+
+{% endif %}
+    int filled = 0;
+    for (;;) {
+        /* Slide the window by TINYML_HOP_SAMPLES and read new samples. */
+        if (filled == TINYML_WINDOW_SAMPLES) {
+            for (int i = TINYML_HOP_SAMPLES; i < TINYML_WINDOW_SAMPLES; i++) {
+                for (int a = 0; a < TINYML_NUM_AXES; a++) {
+                    window[(i - TINYML_HOP_SAMPLES) * TINYML_NUM_AXES + a] = window[i * TINYML_NUM_AXES + a];
+                }
+            }
+            filled -= TINYML_HOP_SAMPLES;
+        }
+        while (filled < TINYML_WINDOW_SAMPLES) {
+            read_sensor(&window[filled * TINYML_NUM_AXES]);
+            filled++;
+        }
+        report(model_predict(window));
+    }
+}
