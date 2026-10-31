@@ -1,0 +1,24 @@
+id: human_activity
+version: 1
+title: Human activity
+summary: Tell what a person is doing (resting, walking, running, climbing stairs) from a wearable motion sensor.
+keywords: [activity, walking, walk, running, run, steps, wearable, wrist, watch, person, worker, fitness, posture, stairs, sitting, standing]
+default_task: classification
+sensor_ma: 0.5  # typical sensor current, used only for the battery estimate
+sensor: imu
+window_ms: 2560
+hop_ratio: 0.5
+max_window_samples: 256
+include_magnitude: true
+feature_families: [time, spectral]
+min_minutes:
+  normal: 1
+  per_class: 0.5
+min_windows_per_class: 20
+targets:
+  anomaly: {detection_rate: 0.90, false_alarm_rate: 0.05}
+  classification: {accuracy: 0.85}
+model_budget_kb: 64
+starting_rung: rules
+default_max_latency_ms: 1000
+normal_label_hints: [idle, rest, resting, still, sitting, normal]
